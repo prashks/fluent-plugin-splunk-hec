@@ -16,7 +16,7 @@ module Fluent::Plugin
     autoload :VERSION, "fluent/plugin/out_splunk_hec/version"
     autoload :MatchFormatter, "fluent/plugin/out_splunk_hec/match_formatter"
 
-    KEY_FIELDS = %w[index host source sourcetype metric_name metric_value].freeze
+    KEY_FIELDS = %w[index host source sourcetype metric_name metric_value metric_time].freeze
     TAG_PLACEHOLDER = '${tag}'.freeze
 
     MISSING_FIELD = Hash.new { |h, k|
@@ -89,6 +89,12 @@ module Fluent::Plugin
 
     desc "Field name to contain metric value, this is required when `metric_name_key` is set."
     config_param :metric_value_key, :string, default: nil
+
+    desc "Field name to contain metric timestamp, this is required when `metric_name_key` is set."
+    config_param :metric_time_key, :string, default: nil
+
+    desc 'When `data_type` is set to "metric", set this field to `true` to send metrics event data in top-level `fields` json property of the event, `false` otherwise.'
+    config_param :metrics_in_fields, :bool, default: false
 
     desc 'When set to true, all fields defined in `index_key`, `host_key`, `source_key`, `sourcetype_key`, `metric_name_key`, `metric_value_key` will not be removed from the original event.'
     config_param :keep_keys, :bool, default: false
@@ -179,6 +185,8 @@ module Fluent::Plugin
       raise Fluent::ConfigError, "`metric_name_key` is required when `metrics_from_event` is `false`." unless @metric_name_key
 
       raise Fluent::ConfigError, "`metric_value_key` is required when `metric_name_key` is set." unless @metric_value_key
+
+      raise Fluent::ConfigError, "`metric_time_key` is required when `metric_name_key` is set." unless @metric_value_key
     end
 
     def prepare_key_fields
@@ -228,6 +236,9 @@ module Fluent::Plugin
 	define_singleton_method :format, method(:format_event)
       else
 	define_singleton_method :format, method(:format_metric)
+	if @metrics_in_fields
+	  @hec_api = URI("#{@protocol}://#{@hec_host}:#{@hec_port}/services/collector/event")
+	end
       end
     end
 
@@ -267,17 +278,21 @@ module Fluent::Plugin
 	# http://docs.splunk.com/Documentation/Splunk/latest/RESTREF/RESTinput#services.2Fcollector
 	# `time` should be a string or unsigned integer.
 	# That's why we use `to_s` here.
-	time: time.to_f.to_s,
-	event: 'metric'
+	time: time.to_f.to_s
       }
       payload[:index] = @index.(tag, record) if @index
       payload[:source] = @source.(tag, record) if @source
       payload[:sourcetype] = @sourcetype.(tag, record) if @sourcetype
 
+      if @metrics_in_fields
+	payload[:event] = 'metric'
+      end
+
       if not @metrics_from_event
 	fields = {
 	  metric_name: @metric_name.(tag, record),
-	  _value: @metric_value.(tag, record)
+	  _value: @metric_value.(tag, record),
+	  _time: @metric_time.(tag, record)
 	}
 
 	if @extra_fields
@@ -288,7 +303,11 @@ module Fluent::Plugin
 
 	fields.compact!
 
-	payload[:fields] = convert_to_utf8 fields
+        if @metrics_in_fields
+	  payload[:fields] = convert_to_utf8 fields
+        else
+	  payload[:event] = convert_to_utf8 fields
+        end
 
 	return MultiJson.dump(payload)
       end

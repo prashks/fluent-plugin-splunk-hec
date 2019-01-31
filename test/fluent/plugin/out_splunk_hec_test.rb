@@ -175,7 +175,7 @@ describe Fluent::Plugin::SplunkHecOutput do
       }.must_raise Fluent::ConfigError
 
       expect(
-	create_output_driver('hec_host somehost', 'data_type metric', 'metric_name_key x', 'metric_value_key y')
+	create_output_driver('hec_host somehost', 'data_type metric', 'metric_name_key x', 'metric_value_key y', 'metric_time_key z')
       ).wont_be_nil
     end
 
